@@ -1,46 +1,66 @@
 import sys
 import requests
 import pandas as pd
+from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QPushButton, QLabel, QFileDialog, 
                              QTableWidget, QTableWidgetItem, QHeaderView, 
-                             QMessageBox, QLineEdit, QFrame, QScrollArea, QSplitter)
+                             QMessageBox, QLineEdit, QFrame, QScrollArea)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QFont, QPalette
+from PyQt5.QtGui import QColor
+
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+
+# PDF Library
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
 
 # Configuration
 API_BASE = "http://127.0.0.1:8000/api"
 
-# --- Styles (Mimicking the React App.css) ---
+# --- Styles ---
 STYLES = """
     QMainWindow { background-color: #f0f2f5; }
     
-    /* Login Box */
     QFrame#LoginBox { background-color: white; border-radius: 8px; border: 1px solid #ddd; }
     QLineEdit { padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; }
     
-    /* Header */
     QFrame#Header { background-color: #2c3e50; }
     QLabel#HeaderTitle { color: white; font-size: 20px; font-weight: bold; }
     QPushButton#LogoutBtn { background-color: transparent; border: 1px solid white; color: white; padding: 5px 15px; border-radius: 4px; }
     QPushButton#LogoutBtn:hover { background-color: rgba(255,255,255,0.1); }
 
-    /* Cards */
     QFrame#Card { background-color: white; border-radius: 8px; border: 1px solid #e1e4e8; }
     QLabel#CardTitle { color: #7f8c8d; font-size: 12px; font-weight: bold; text-transform: uppercase; }
     QLabel#CardValue { color: #2c3e50; font-size: 24px; font-weight: bold; }
     
-    /* Buttons */
     QPushButton#PrimaryBtn { background-color: #3498db; color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; }
     QPushButton#PrimaryBtn:hover { background-color: #2980b9; }
+    
     QPushButton#SuccessBtn { background-color: #27ae60; color: white; border: none; padding: 10px; border-radius: 4px; font-weight: bold; }
     QPushButton#SuccessBtn:hover { background-color: #219150; }
     
-    /* Table */
     QTableWidget { border: 1px solid #ddd; background-color: white; gridline-color: #eee; }
     QHeaderView::section { background-color: #f8f9fa; padding: 8px; border: none; font-weight: bold; color: #555; }
+    
+    /* History Button Style */
+    QPushButton#HistoryBtn {
+        text-align: left;
+        padding: 8px;
+        background-color: white;
+        border: 1px solid #eee;
+        border-radius: 4px;
+        color: #555;
+        margin-bottom: 4px;
+    }
+    QPushButton#HistoryBtn:hover {
+        background-color: #e3f2fd;
+        border-color: #3498db;
+        color: #3498db;
+    }
 """
 
 class MplCanvas(FigureCanvas):
@@ -62,7 +82,6 @@ class LoginWindow(QWidget):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
         
-        # Login Box Container
         container = QFrame()
         container.setObjectName("LoginBox")
         container.setFixedSize(350, 400)
@@ -112,264 +131,254 @@ class LoginWindow(QWidget):
             self.btn_action.setObjectName("PrimaryBtn")
             self.btn_toggle.setText("Don't have an account? Register here")
         
-        # Force style refresh
         self.btn_action.style().unpolish(self.btn_action)
         self.btn_action.style().polish(self.btn_action)
 
     def handle_auth(self):
         username = self.txt_user.text()
         password = self.txt_pass.text()
-        
         if not username or not password:
-            QMessageBox.warning(self, "Error", "Please enter both username and password")
+            QMessageBox.warning(self, "Error", "Please enter both credentials")
             return
-            
         endpoint = "register/" if self.is_registering else "login/"
-        url = f"{API_BASE}/{endpoint}"
-        
         try:
-            response = requests.post(url, json={"username": username, "password": password})
+            response = requests.post(f"{API_BASE}/{endpoint}", json={"username": username, "password": password})
             if response.status_code == 200:
                 data = response.json()
                 self.success_signal.emit(data['token'], data['username'])
             else:
-                try:
-                    err_msg = response.json().get('error', 'Authentication failed')
-                except:
-                    err_msg = "Authentication failed"
-                QMessageBox.warning(self, "Error", str(err_msg))
+                err = response.json().get('error', 'Auth failed')
+                if isinstance(err, dict): err = str(err)
+                QMessageBox.warning(self, "Error", err)
         except Exception as e:
-            QMessageBox.critical(self, "Connection Error", f"Could not connect to server.\n{str(e)}")
+            QMessageBox.critical(self, "Connection Error", str(e))
 
 class DashboardWindow(QMainWindow):
     def __init__(self, token, username):
         super().__init__()
         self.token = token
         self.username = username
+        self.current_data = [] # Store data for PDF generation
+        
         self.setWindowTitle("ChemVis Pro - Desktop Dashboard")
-        self.setGeometry(100, 100, 1400, 900) # Updated initial size
+        self.setGeometry(100, 100, 1400, 900)
         self.setStyleSheet(STYLES)
         
-        # Main Layout
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
         
-        # --- 1. Header ---
+        # Header
         header = QFrame()
         header.setObjectName("Header")
         header.setFixedHeight(60)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 0, 20, 0)
+        h_layout = QHBoxLayout(header)
+        h_layout.addWidget(QLabel("⚗️ ChemVis Pro", objectName="HeaderTitle"))
+        h_layout.addStretch()
+        h_layout.addWidget(QLabel(f"Welcome, {self.username}", styleSheet="color:white; font-weight:bold; margin-right:15px;"))
+        btn_logout = QPushButton("Logout", objectName="LogoutBtn")
+        btn_logout.clicked.connect(self.logout)
+        h_layout.addWidget(btn_logout)
+        layout.addWidget(header)
         
-        title = QLabel("⚗️ ChemVis Pro")
-        title.setObjectName("HeaderTitle")
-        header_layout.addWidget(title)
+        # Content
+        content = QHBoxLayout()
+        content.setContentsMargins(20, 20, 20, 20)
+        content.setSpacing(20)
         
-        header_layout.addStretch()
-        
-        user_lbl = QLabel(f"Welcome, {self.username}")
-        user_lbl.setStyleSheet("color: white; font-weight: bold; margin-right: 15px;")
-        header_layout.addWidget(user_lbl)
-        
-        logout_btn = QPushButton("Logout")
-        logout_btn.setObjectName("LogoutBtn")
-        logout_btn.clicked.connect(self.logout)
-        header_layout.addWidget(logout_btn)
-        
-        main_layout.addWidget(header)
-        
-        # --- 2. Content Area (Splitter for Sidebar/Main) ---
-        content_layout = QHBoxLayout()
-        content_layout.setContentsMargins(20, 20, 20, 20)
-        content_layout.setSpacing(20)
-        
-        # Sidebar (Controls)
+        # Sidebar
         sidebar = QWidget()
         sidebar.setFixedWidth(250)
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 0, 0, 0)
-        sidebar_layout.setSpacing(20)
+        s_layout = QVBoxLayout(sidebar)
         
-        # Upload Card
-        upload_card = QFrame()
-        upload_card.setObjectName("Card")
-        uc_layout = QVBoxLayout(upload_card)
-        uc_lbl = QLabel("📂 Upload CSV")
-        uc_lbl.setStyleSheet("font-weight: bold; font-size: 16px;")
-        self.btn_upload = QPushButton("Select & Upload")
-        self.btn_upload.setObjectName("SuccessBtn")
-        self.btn_upload.clicked.connect(self.upload_file)
-        uc_layout.addWidget(uc_lbl)
-        uc_layout.addWidget(self.btn_upload)
-        sidebar_layout.addWidget(upload_card)
+        # Upload
+        up_card = QFrame(objectName="Card")
+        up_layout = QVBoxLayout(up_card)
+        up_layout.addWidget(QLabel("📂 Upload CSV", styleSheet="font-weight:bold; font-size:16px;"))
+        btn_up = QPushButton("Select & Upload", objectName="SuccessBtn")
+        btn_up.clicked.connect(self.upload_file)
+        up_layout.addWidget(btn_up)
+        s_layout.addWidget(up_card)
         
-        # History Card
-        history_card = QFrame()
-        history_card.setObjectName("Card")
-        hc_layout = QVBoxLayout(history_card)
-        hc_lbl = QLabel("📜 History")
-        hc_lbl.setStyleSheet("font-weight: bold; font-size: 16px;")
-        self.history_list = QLabel("Loading...")
-        self.history_list.setStyleSheet("color: #666; font-size: 13px;")
-        self.history_list.setWordWrap(True)
-        self.history_list.setAlignment(Qt.AlignTop)
-        hc_layout.addWidget(hc_lbl)
-        hc_layout.addWidget(self.history_list)
-        hc_layout.addStretch()
-        sidebar_layout.addWidget(history_card)
+        # Download PDF Button
+        pdf_card = QFrame(objectName="Card")
+        pdf_layout = QVBoxLayout(pdf_card)
+        pdf_layout.addWidget(QLabel("📄 Reports", styleSheet="font-weight:bold; font-size:16px;"))
+        self.btn_pdf = QPushButton("Download PDF", objectName="PrimaryBtn")
+        self.btn_pdf.clicked.connect(self.generate_pdf)
+        self.btn_pdf.setEnabled(False) # Disabled until data loads
+        pdf_layout.addWidget(self.btn_pdf)
+        s_layout.addWidget(pdf_card)
         
-        sidebar_layout.addStretch()
-        content_layout.addWidget(sidebar)
+        # History
+        hist_card = QFrame(objectName="Card")
+        h_layout = QVBoxLayout(hist_card)
+        h_layout.addWidget(QLabel("📜 History", styleSheet="font-weight:bold; font-size:16px;"))
         
-        # Dashboard Content
-        dashboard = QWidget()
-        dash_layout = QVBoxLayout(dashboard)
-        dash_layout.setContentsMargins(0, 0, 0, 0)
-        dash_layout.setSpacing(20)
+        # Container for clickable history items
+        self.hist_container = QWidget()
+        self.hist_layout = QVBoxLayout(self.hist_container)
+        self.hist_layout.setContentsMargins(0, 5, 0, 0)
+        self.hist_layout.setAlignment(Qt.AlignTop)
         
-        # KPI Row
+        # Scroll Area for history
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.hist_container)
+        scroll.setFrameShape(QFrame.NoFrame)
+        h_layout.addWidget(scroll)
+        
+        s_layout.addWidget(hist_card)
+        
+        s_layout.addStretch()
+        content.addWidget(sidebar)
+        
+        # Main Dash
+        dash = QWidget()
+        d_layout = QVBoxLayout(dash)
+        
+        # KPIs
         kpi_row = QHBoxLayout()
-        self.card_total = self.create_kpi_card("Total Equipment", "-")
-        self.card_pressure = self.create_kpi_card("Avg Pressure", "-")
-        self.card_temp = self.create_kpi_card("Avg Temp", "-")
-        kpi_row.addWidget(self.card_total)
-        kpi_row.addWidget(self.card_pressure)
-        kpi_row.addWidget(self.card_temp)
-        dash_layout.addLayout(kpi_row)
+        self.kpi_total = self.make_kpi("Total Equipment", "-")
+        self.kpi_press = self.make_kpi("Avg Pressure", "-")
+        self.kpi_temp = self.make_kpi("Avg Temp", "-")
+        kpi_row.addWidget(self.kpi_total)
+        kpi_row.addWidget(self.kpi_press)
+        kpi_row.addWidget(self.kpi_temp)
+        d_layout.addLayout(kpi_row)
         
-        # Charts Row
-        charts_row = QHBoxLayout()
-        # Bar Chart Frame
-        bar_frame = QFrame()
-        bar_frame.setObjectName("Card")
-        bar_layout = QVBoxLayout(bar_frame)
-        bar_layout.addWidget(QLabel("Pressure vs Temperature"))
-        self.canvas_bar = MplCanvas(self, width=5, height=4, dpi=100)
-        bar_layout.addWidget(self.canvas_bar)
-        charts_row.addWidget(bar_frame, 2)
+        # Charts
+        chart_row = QHBoxLayout()
+        # Bar
+        bar_f = QFrame(objectName="Card")
+        bl = QVBoxLayout(bar_f)
+        bl.addWidget(QLabel("Pressure vs Temp"))
+        self.cv_bar = MplCanvas(self)
+        bl.addWidget(self.cv_bar)
+        chart_row.addWidget(bar_f, 2)
+        # Pie
+        pie_f = QFrame(objectName="Card")
+        pl = QVBoxLayout(pie_f)
+        pl.addWidget(QLabel("Type Distribution"))
+        self.cv_pie = MplCanvas(self)
+        pl.addWidget(self.cv_pie)
+        chart_row.addWidget(pie_f, 1)
+        d_layout.addLayout(chart_row)
         
-        # Pie Chart Frame
-        pie_frame = QFrame()
-        pie_frame.setObjectName("Card")
-        pie_layout = QVBoxLayout(pie_frame)
-        pie_layout.addWidget(QLabel("Type Distribution"))
-        self.canvas_pie = MplCanvas(self, width=5, height=4, dpi=100)
-        pie_layout.addWidget(self.canvas_pie)
-        charts_row.addWidget(pie_frame, 1)
-        
-        dash_layout.addLayout(charts_row)
-        
-        # Table Section
-        table_frame = QFrame()
-        table_frame.setObjectName("Card")
-        table_layout = QVBoxLayout(table_frame)
-        table_layout.addWidget(QLabel("Live Data Grid"))
-        
+        # Table
+        tbl_f = QFrame(objectName="Card")
+        tl = QVBoxLayout(tbl_f)
+        tl.addWidget(QLabel("Live Data Grid"))
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(["Name", "Type", "Pressure", "Temp", "Status"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.verticalHeader().setVisible(False)
-        table_layout.addWidget(self.table)
+        tl.addWidget(self.table)
+        d_layout.addWidget(tbl_f)
         
-        dash_layout.addWidget(table_frame)
+        content.addWidget(dash)
+        layout.addLayout(content)
         
-        content_layout.addWidget(dashboard)
-        main_layout.addLayout(content_layout)
+        # Initial Load: Refresh history on start
+        self.refresh_history()
 
-        # Trigger initial fetch
-        self.fetch_initial_data()
+    def make_kpi(self, title, val):
+        f = QFrame(objectName="Card")
+        l = QVBoxLayout(f)
+        l.setAlignment(Qt.AlignCenter)
+        l.addWidget(QLabel(title, objectName="CardTitle"))
+        l.addWidget(QLabel(val, objectName="CardValue"))
+        return f
 
-    def fetch_initial_data(self):
-        # Attempt to fetch history/latest data on login
-        # This assumes your Django view supports GET, or we rely on the user to upload
+    def refresh_history(self):
+        # Fetch history specific to logged-in user
+        headers = {'Authorization': f'Token {self.token}'}
+        
+        # Clear existing buttons
+        while self.hist_layout.count():
+            item = self.hist_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
         try:
-            response = requests.get(f"{API_BASE}/upload/")
-            if response.status_code == 200:
-                data = response.json()
-                self.update_ui(data)
+            res = requests.get(f"{API_BASE}/upload/", headers=headers)
+            if res.status_code == 200:
+                history = res.json().get('history', [])
+                if history:
+                    for h in history:
+                        raw_date = h.get('uploaded_at', '').split('T')[0]
+                        btn_text = f"{h.get('file_name')}\n{raw_date}"
+                        
+                        btn = QPushButton(btn_text)
+                        btn.setObjectName("HistoryBtn")
+                        # Use lambda to capture the ID
+                        btn.clicked.connect(lambda checked, pk=h['id']: self.load_history_item(pk))
+                        self.hist_layout.addWidget(btn)
+                else:
+                    self.hist_layout.addWidget(QLabel("No uploads yet."))
             else:
-                self.history_list.setText("No history found.\nUpload a file to start.")
-        except:
-            self.history_list.setText("Could not fetch history.\nUpload a file to start.")
+                self.hist_layout.addWidget(QLabel("Failed to load history."))
+        except Exception as e:
+            self.hist_layout.addWidget(QLabel(f"Connection error: {e}"))
 
-    def create_kpi_card(self, title, value):
-        frame = QFrame()
-        frame.setObjectName("Card")
-        layout = QVBoxLayout(frame)
-        layout.setAlignment(Qt.AlignCenter)
-        lbl_title = QLabel(title)
-        lbl_title.setObjectName("CardTitle")
-        lbl_val = QLabel(value)
-        lbl_val.setObjectName("CardValue")
-        layout.addWidget(lbl_title)
-        layout.addWidget(lbl_val)
-        return frame
-
-    def logout(self):
-        self.close()
-        # Restart App essentially by showing login again
-        self.login_window = LoginWindow()
-        self.login_window.success_signal.connect(start_dashboard)
-        self.login_window.show()
+    def load_history_item(self, pk):
+        headers = {'Authorization': f'Token {self.token}'}
+        try:
+            res = requests.get(f"{API_BASE}/history/{pk}/", headers=headers)
+            if res.status_code == 200:
+                data = res.json()
+                self.current_data = data.get('data', [])
+                self.update_ui(data)
+                self.btn_pdf.setEnabled(True)
+            else:
+                QMessageBox.warning(self, "Error", "Could not load history item")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
 
     def upload_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", "CSV Files (*.csv)")
-        if not file_path: return
+        path, _ = QFileDialog.getOpenFileName(self, "Open CSV", "", "CSV Files (*.csv)")
+        if not path: return
         
+        headers = {'Authorization': f'Token {self.token}'}
         try:
-            with open(file_path, 'rb') as f:
-                # Include token if your API needs it, though we set permission to AllowAny in views currently
-                response = requests.post(
-                    f"{API_BASE}/upload/", 
-                    files={'file': f}
-                )
+            with open(path, 'rb') as f:
+                res = requests.post(f"{API_BASE}/upload/", files={'file': f}, headers=headers)
             
-            if response.status_code == 200:
-                data = response.json()
+            if res.status_code == 200:
+                data = res.json()
+                self.current_data = data.get('data', [])
                 self.update_ui(data)
+                self.btn_pdf.setEnabled(True)
+                self.refresh_history() # Refresh list after upload
             else:
-                QMessageBox.warning(self, "Upload Failed", f"Server Error: {response.status_code}")
-                
+                QMessageBox.warning(self, "Error", f"Upload failed: {res.status_code}")
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Connection failed: {str(e)}")
+            QMessageBox.critical(self, "Error", str(e))
 
     def update_ui(self, data):
         stats = data.get('stats', {})
         records = data.get('data', [])
-        history = data.get('history', [])
         
-        # 1. Update KPIs
-        if stats:
-            self.card_total.findChild(QLabel, "CardValue").setText(str(stats.get('total_count', 0)))
-            self.card_pressure.findChild(QLabel, "CardValue").setText(f"{stats.get('avg_pressure', 0)} psi")
-            self.card_temp.findChild(QLabel, "CardValue").setText(f"{stats.get('avg_temp', 0)} °C")
+        # KPIs
+        self.kpi_total.findChild(QLabel, "CardValue").setText(str(stats.get('total_count', 0)))
+        self.kpi_press.findChild(QLabel, "CardValue").setText(f"{stats.get('avg_pressure', 0)}")
+        self.kpi_temp.findChild(QLabel, "CardValue").setText(f"{stats.get('avg_temp', 0)}")
         
-        # 2. Update History
-        if history:
-            hist_text = ""
-            for h in history:
-                hist_text += f"• {h.get('file_name', 'Unknown')}\n"
-            self.history_list.setText(hist_text)
-        else:
-            self.history_list.setText("No uploads yet")
-        
-        # 3. Update Table
+        # Table
         self.table.setRowCount(len(records))
         for i, row in enumerate(records):
-            self.table.setItem(i, 0, QTableWidgetItem(str(row.get('Equipment Name', row.get('name', '')))))
-            self.table.setItem(i, 1, QTableWidgetItem(str(row.get('Type', row.get('type', '')))))
-            self.table.setItem(i, 2, QTableWidgetItem(str(row.get('Pressure', row.get('pressure', 0)))))
-            self.table.setItem(i, 3, QTableWidgetItem(str(row.get('Temperature', row.get('temp', 0)))))
+            self.table.setItem(i, 0, QTableWidgetItem(str(row.get('Equipment Name', row.get('name')))))
+            self.table.setItem(i, 1, QTableWidgetItem(str(row.get('Type', row.get('type')))))
+            self.table.setItem(i, 2, QTableWidgetItem(str(row.get('Pressure', row.get('pressure')))))
+            self.table.setItem(i, 3, QTableWidgetItem(str(row.get('Temperature', row.get('temp')))))
             
-            status = row.get('Status', 'OK')
+            status = row.get('Status', 'UNKNOWN')
             item = QTableWidgetItem(status)
             item.setTextAlignment(Qt.AlignCenter)
             if status == 'CRITICAL':
-                item.setBackground(QColor("#fadbd8")) # Light red
-                item.setForeground(QColor("#c0392b")) # Dark red text
+                item.setBackground(QColor("#fadbd8"))
+                item.setForeground(QColor("#c0392b"))
             elif status == 'WARNING':
                 item.setBackground(QColor("#fdebd0"))
                 item.setForeground(QColor("#d35400"))
@@ -378,52 +387,91 @@ class DashboardWindow(QMainWindow):
                 item.setForeground(QColor("#27ae60"))
             self.table.setItem(i, 4, item)
             
-        # 4. Update Charts
-        self.update_charts(records, stats)
-
-    def update_charts(self, records, stats):
+        # Charts
         df = pd.DataFrame(records)
-        
-        # Bar Chart
-        self.canvas_bar.axes.cla()
+        self.cv_bar.axes.cla()
         if not df.empty:
             names = [r.get('Equipment Name', r.get('name')) for r in records]
-            pressures = [r.get('Pressure', r.get('pressure', 0)) for r in records]
-            temps = [r.get('Temperature', r.get('temp', 0)) for r in records]
-            
+            p = [r.get('Pressure', r.get('pressure', 0)) for r in records]
+            t = [r.get('Temperature', r.get('temp', 0)) for r in records]
             x = range(len(names))
-            width = 0.35
-            self.canvas_bar.axes.bar([i - width/2 for i in x], pressures, width, label='Pressure', color='#36A2EB', alpha=0.7)
-            self.canvas_bar.axes.bar([i + width/2 for i in x], temps, width, label='Temp', color='#FF6384', alpha=0.7)
-            
-            self.canvas_bar.axes.set_xticks(x)
-            self.canvas_bar.axes.set_xticklabels(names, rotation=45, ha='right')
-            self.canvas_bar.axes.legend()
-        self.canvas_bar.draw()
-
-        # Pie Chart
-        self.canvas_pie.axes.cla()
-        dist = stats.get('type_distribution', {}) if stats else {}
+            w = 0.35
+            self.cv_bar.axes.bar([i-w/2 for i in x], p, w, label='Press', color='#36A2EB')
+            self.cv_bar.axes.bar([i+w/2 for i in x], t, w, label='Temp', color='#FF6384')
+            self.cv_bar.axes.set_xticks(x)
+            self.cv_bar.axes.set_xticklabels(names, rotation=45, ha='right')
+            self.cv_bar.axes.legend()
+        self.cv_bar.draw()
+        
+        self.cv_pie.axes.cla()
+        dist = stats.get('type_distribution', {})
         if dist:
-            labels = list(dist.keys())
-            values = list(dist.values())
-            colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF']
-            self.canvas_pie.axes.pie(values, labels=labels, autopct='%1.1f%%', colors=colors[:len(labels)])
-        self.canvas_pie.draw()
+            self.cv_pie.axes.pie(dist.values(), labels=dist.keys(), autopct='%1.1f%%')
+        self.cv_pie.draw()
 
-# --- Main Bootstrapper ---
+    def generate_pdf(self):
+        if not self.current_data:
+            return
+            
+        save_path, _ = QFileDialog.getSaveFileName(self, "Save PDF", "equipment_report.pdf", "PDF Files (*.pdf)")
+        if not save_path: return
+        
+        try:
+            doc = SimpleDocTemplate(save_path, pagesize=letter)
+            elements = []
+            styles = getSampleStyleSheet()
+            
+            # Title
+            elements.append(Paragraph("Chemical Equipment Report", styles['Title']))
+            elements.append(Spacer(1, 12))
+            elements.append(Paragraph(f"Generated by: {self.username} on {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
+            elements.append(Spacer(1, 20))
+            
+            # Table Data
+            data = [["Name", "Type", "Pressure", "Temp", "Status"]]
+            for row in self.current_data:
+                data.append([
+                    str(row.get('Equipment Name', row.get('name'))),
+                    str(row.get('Type', row.get('type'))),
+                    str(row.get('Pressure', row.get('pressure'))),
+                    str(row.get('Temperature', row.get('temp'))),
+                    str(row.get('Status', 'UNKNOWN'))
+                ])
+                
+            table = Table(data)
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+            ]))
+            
+            elements.append(table)
+            doc.build(elements)
+            QMessageBox.information(self, "Success", f"PDF saved to {save_path}")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"PDF Generation failed: {str(e)}")
+
+    def logout(self):
+        self.close()
+        self.login = LoginWindow()
+        self.login.success_signal.connect(start_dashboard)
+        self.login.show()
+
 def start_dashboard(token, username):
     global window
     window = DashboardWindow(token, username)
-    window.showMaximized() # Launch maximized for similar feel to web app
+    window.showMaximized()
     login.close()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyle('Fusion')
-    
     login = LoginWindow()
     login.success_signal.connect(start_dashboard)
     login.show()
-    
     sys.exit(app.exec_())

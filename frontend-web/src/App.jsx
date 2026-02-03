@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import {
   Chart as ChartJS,
@@ -22,7 +22,6 @@ ChartJS.register(
 
 function App() {
   // --- State ---
-  // Persistence: Initialize state from localStorage
   const [authToken, setAuthToken] = useState(localStorage.getItem('authToken') || '');
   const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('authToken'));
   const [username, setUsername] = useState(localStorage.getItem('username') || '');
@@ -37,7 +36,25 @@ function App() {
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
 
-  // --- Auth Handler (Backend Integrated) ---
+  // --- Effect: Load history on login ---
+  useEffect(() => {
+    if (isLoggedIn && authToken) {
+      fetchHistory();
+    }
+  }, [isLoggedIn, authToken]);
+
+  const fetchHistory = async () => {
+    try {
+      const res = await axios.get('http://127.0.0.1:8000/api/upload/', {
+        headers: { 'Authorization': `Token ${authToken}` }
+      });
+      setHistory(res.data.history);
+    } catch (err) {
+      console.error("Failed to fetch history", err);
+    }
+  };
+
+  // --- Auth Handler ---
   const handleAuth = async (e) => {
     e.preventDefault();
     setError('');
@@ -56,7 +73,6 @@ function App() {
         password: password
       });
 
-      // If successful, backend returns { token: '...', username: '...' }
       if (response.status === 200) {
         const token = response.data.token;
         const user = response.data.username;
@@ -66,14 +82,12 @@ function App() {
         setUsername(user);
         setError('');
         
-        // Persistence: Save to localStorage
         localStorage.setItem('authToken', token);
         localStorage.setItem('username', user);
       }
     } catch (err) {
       console.error(err);
       if (err.response && err.response.data) {
-        // Handle Django validation errors
         const msg = err.response.data.error || JSON.stringify(err.response.data);
         setError(`Error: ${msg}`);
       } else {
@@ -84,20 +98,35 @@ function App() {
 
   // --- Logout Handler ---
   const handleLogout = () => {
-    // 1. Clear State
     setIsLoggedIn(false);
     setUsername('');
     setPassword('');
     setAuthToken('');
     setData([]);
     setStats(null);
-    
-    // 2. Fix: Ensure we go back to Login view, not Register
+    setHistory([]);
+    setFile(null);
     setIsRegistering(false); 
 
-    // 3. Clear Persistence
     localStorage.removeItem('authToken');
     localStorage.removeItem('username');
+  };
+
+  // --- History Handler (NEW) ---
+  const loadHistoryItem = async (id) => {
+    setLoading(true);
+    try {
+      const res = await axios.get(`http://127.0.0.1:8000/api/history/${id}/`, {
+         headers: { 'Authorization': `Token ${authToken}` }
+      });
+      setData(res.data.data);
+      setStats(res.data.stats);
+      setError('');
+    } catch (err) {
+      console.error(err);
+      setError('Failed to load history item.');
+    }
+    setLoading(false);
   };
 
   // --- File Handler ---
@@ -120,8 +149,7 @@ function App() {
       const res = await axios.post('http://127.0.0.1:8000/api/upload/', formData, {
         headers: { 
           'Content-Type': 'multipart/form-data',
-          // Optional: Send token if you want to protect the upload route later
-          // 'Authorization': `Token ${authToken}` 
+          'Authorization': `Token ${authToken}` // <--- UNCOMMENTED THIS!
         }
       });
 
@@ -131,7 +159,11 @@ function App() {
       setError('');
     } catch (err) {
       console.error(err);
-      setError('Upload failed. Is the Django server running?');
+      if (err.response && err.response.status === 403) {
+        setError('Session expired or invalid. Please logout and login again.');
+      } else {
+        setError('Upload failed. Is the Django server running?');
+      }
     }
     setLoading(false);
   };
@@ -172,7 +204,7 @@ function App() {
     doc.save("equipment_report.pdf");
   };
 
-  // --- Chart Data Preparation ---
+  // --- Chart Data ---
   const barChartData = {
     labels: data.map(d => d['Equipment Name'] || d.name),
     datasets: [
@@ -205,7 +237,6 @@ function App() {
   };
 
   // --- Views ---
-  
   if (!isLoggedIn) {
     return (
       <div className="login-container">
@@ -223,9 +254,7 @@ function App() {
             <button type="submit" style={{ backgroundColor: isRegistering ? '#27ae60' : '#3498db' }}>
               {isRegistering ? 'Create Account' : 'Login'}
             </button>
-            
             {error && <p className="error-text">{error}</p>}
-
             <p style={{ marginTop: '15px', fontSize: '0.9rem', color: '#666' }}>
               {isRegistering ? "Already have an account?" : "Don't have an account?"}
               <span 
@@ -236,7 +265,6 @@ function App() {
               </span>
             </p>
           </form>
-          {!isRegistering && <small>Enter any credentials to register</small>}
         </div>
       </div>
     );
@@ -264,14 +292,15 @@ function App() {
           </div>
 
           <div className="card history-card">
-            <h3>📜 History (Last 5)</h3>
-            <ul>
+            <h3>📜 History</h3>
+            <ul className="history-list">
               {history.map((h, i) => (
-                <li key={i}>
-                  <span>{h.file_name}</span>
-                  <small>{new Date(h.uploaded_at).toLocaleDateString()}</small>
+                <li key={h.id || i} onClick={() => loadHistoryItem(h.id)} className="history-item">
+                  <span className="file-name">{h.file_name}</span>
+                  <span className="file-date">{new Date(h.uploaded_at).toLocaleDateString()}</span>
                 </li>
               ))}
+              {history.length === 0 && <small style={{color:'#999'}}>No history yet</small>}
             </ul>
           </div>
         </section>

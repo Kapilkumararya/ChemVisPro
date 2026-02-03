@@ -77,3 +77,39 @@ th { background: #f8f9fa; font-weight: 600; color: #555; }
   .kpi-row { grid-template-columns: 1fr 1fr; }
   .charts-grid { grid-template-columns: 1fr; }
 }
+.history-list {
+  list-style: none;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.history-item {
+  background: #f8f9fa;
+  border: 1px solid #e9ecef;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  transition: all 0.2s ease;
+}
+
+.history-item:hover {
+  background: #e3f2fd;
+  border-color: #3498db;
+  transform: translateX(3px);
+}
+
+.file-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #2c3e50;
+}
+
+.file-date {
+  font-size: 0.75rem;
+  color: #7f8c8d;
+}
