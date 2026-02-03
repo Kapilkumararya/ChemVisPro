@@ -1,0 +1,7 @@
+ID,Equipment Name,Type,Flowrate,Pressure,Temperature
+1,Reactor-A,Reactor,120.5,850,320
+2,HeatEx-01,Heat Exchanger,450.0,120,65
+3,Pump-X12,Pump,800.0,650,45
+4,Reactor-B,Reactor,110.0,500,280
+5,Tank-Alpha,Storage Tank,0.0,15,25
+6,Distill-C1,Distillation Column,300.5,1020,410
