@@ -22,11 +22,13 @@ ChartJS.register(
 
 function App() {
   // --- State ---
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  // Persistence: Initialize state from localStorage
+  const [authToken, setAuthToken] = useState(localStorage.getItem('authToken') || '');
+  const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('authToken'));
+  const [username, setUsername] = useState(localStorage.getItem('username') || '');
+  
   const [isRegistering, setIsRegistering] = useState(false);
-  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [authToken, setAuthToken] = useState(''); // Store Django Token
   
   const [file, setFile] = useState(null);
   const [data, setData] = useState([]);
@@ -56,12 +58,17 @@ function App() {
 
       // If successful, backend returns { token: '...', username: '...' }
       if (response.status === 200) {
-        setAuthToken(response.data.token);
+        const token = response.data.token;
+        const user = response.data.username;
+
+        setAuthToken(token);
         setIsLoggedIn(true);
+        setUsername(user);
         setError('');
         
-        // Optional: Save token to localStorage for persistence
-        // localStorage.setItem('token', response.data.token);
+        // Persistence: Save to localStorage
+        localStorage.setItem('authToken', token);
+        localStorage.setItem('username', user);
       }
     } catch (err) {
       console.error(err);
@@ -73,6 +80,24 @@ function App() {
         setError('Connection to backend failed.');
       }
     }
+  };
+
+  // --- Logout Handler ---
+  const handleLogout = () => {
+    // 1. Clear State
+    setIsLoggedIn(false);
+    setUsername('');
+    setPassword('');
+    setAuthToken('');
+    setData([]);
+    setStats(null);
+    
+    // 2. Fix: Ensure we go back to Login view, not Register
+    setIsRegistering(false); 
+
+    // 3. Clear Persistence
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('username');
   };
 
   // --- File Handler ---
@@ -223,7 +248,7 @@ function App() {
         <h1>⚗️ ChemVis Pro</h1>
         <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
           <span style={{ fontSize: '0.9rem' }}>Welcome, <strong>{username}</strong></span>
-          <button className="logout-btn" onClick={() => { setIsLoggedIn(false); setUsername(''); setPassword(''); }}>Logout</button>
+          <button className="logout-btn" onClick={handleLogout}>Logout</button>
         </div>
       </header>
 

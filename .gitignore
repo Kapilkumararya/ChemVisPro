@@ -1,0 +1,39 @@
+# =========================
+# Python / Django
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env
+
+# Django files
+db.sqlite3
+media/
+staticfiles/
+
+# =========================
+# React / Vite (Frontend)
+# =========================
+frontend-web/node_modules/
+frontend-web/dist/
+frontend-web/build/
+
+# Vite / npm
+frontend-web/.pnp
+frontend-web/.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# =========================
+# IDE / OS
+# =========================
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
