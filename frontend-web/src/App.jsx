@@ -22,6 +22,10 @@ ChartJS.register(
 
 function App() {
   // --- State ---
+  // Intro State
+  const [showIntro, setShowIntro] = useState(true);
+
+  // Persistence: Initialize state from localStorage
   const [authToken, setAuthToken] = useState(localStorage.getItem('authToken') || '');
   const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('authToken'));
   const [username, setUsername] = useState(localStorage.getItem('username') || '');
@@ -107,12 +111,13 @@ function App() {
     setHistory([]);
     setFile(null);
     setIsRegistering(false); 
+    setShowIntro(true); // Show intro again on logout
 
     localStorage.removeItem('authToken');
     localStorage.removeItem('username');
   };
 
-  // --- History Handler (NEW) ---
+  // --- History Handler ---
   const loadHistoryItem = async (id) => {
     setLoading(true);
     try {
@@ -149,7 +154,7 @@ function App() {
       const res = await axios.post('http://127.0.0.1:8000/api/upload/', formData, {
         headers: { 
           'Content-Type': 'multipart/form-data',
-          'Authorization': `Token ${authToken}` // <--- UNCOMMENTED THIS!
+          'Authorization': `Token ${authToken}` 
         }
       });
 
@@ -236,12 +241,66 @@ function App() {
     };
   };
 
-  // --- Views ---
+  // --- Chart Options ---
+  const pieOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: 'bottom',
+      },
+    },
+  };
+
+  // --- 1. Intro Page View ---
+  if (showIntro) {
+    return (
+      <div className="intro-container">
+        <div className="intro-content">
+          <div className="logo-icon">⚗️</div>
+          <h1>ChemVis Pro</h1>
+          <h2>Chemical Equipment Parameter Visualizer</h2>
+          
+          <p className="intro-text">
+            A comprehensive hybrid solution for monitoring, analyzing, and reporting on chemical equipment performance.
+            Seamlessly visualize data across Web and Desktop environments.
+          </p>
+
+          <div className="feature-grid">
+            <div className="feature-item">
+              <span>📊</span>
+              <h3>Real-Time Analytics</h3>
+              <p>Visualize Pressure vs. Temperature correlations instantly.</p>
+            </div>
+            <div className="feature-item">
+              <span>🛡️</span>
+              <h3>Health Monitoring</h3>
+              <p>Automatic detection of critical parameter violations.</p>
+            </div>
+            <div className="feature-item">
+              <span>📂</span>
+              <h3>Secure History</h3>
+              <p>Track uploads and generate PDF reports for compliance.</p>
+            </div>
+          </div>
+
+          <button className="start-btn" onClick={() => setShowIntro(false)}>
+            {isLoggedIn ? "Go to Dashboard" : "Login / Register"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // --- 2. Login View ---
   if (!isLoggedIn) {
     return (
       <div className="login-container">
         <div className="login-box">
-          <h2>ChemVis Pro {isRegistering ? 'Register' : 'Login'}</h2>
+          <div className="login-header">
+            <h2>{isRegistering ? 'Create Account' : 'Welcome Back'}</h2>
+            <p>Please enter your details to continue</p>
+          </div>
           <form onSubmit={handleAuth}>
             <input 
               type="text" placeholder="Username" 
@@ -270,6 +329,7 @@ function App() {
     );
   }
 
+  // --- 3. Dashboard View ---
   return (
     <div className="app-container">
       <header className="navbar">
@@ -296,8 +356,10 @@ function App() {
             <ul className="history-list">
               {history.map((h, i) => (
                 <li key={h.id || i} onClick={() => loadHistoryItem(h.id)} className="history-item">
-                  <span className="file-name">{h.file_name}</span>
-                  <span className="file-date">{new Date(h.uploaded_at).toLocaleDateString()}</span>
+                  <div style={{display:'flex', flexDirection:'column'}}>
+                    <span className="file-name">{h.file_name}</span>
+                    <span className="file-date">{new Date(h.uploaded_at).toLocaleDateString()}</span>
+                  </div>
                 </li>
               ))}
               {history.length === 0 && <small style={{color:'#999'}}>No history yet</small>}
@@ -335,8 +397,8 @@ function App() {
               </div>
               <div className="chart-card">
                 <h4>Equipment Type Distribution</h4>
-                <div className="pie-container">
-                  <Pie data={getPieData()} />
+                <div className="pie-container" style={{ position: 'relative', height: '300px', width: '100%' }}>
+                  <Pie data={getPieData()} options={pieOptions} />
                 </div>
               </div>
             </div>
