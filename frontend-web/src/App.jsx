@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import {
   Chart as ChartJS,
@@ -22,10 +22,7 @@ ChartJS.register(
 
 function App() {
   // --- State ---
-  // Intro State
   const [showIntro, setShowIntro] = useState(true);
-
-  // Persistence: Initialize state from localStorage
   const [authToken, setAuthToken] = useState(localStorage.getItem('authToken') || '');
   const [isLoggedIn, setIsLoggedIn] = useState(!!localStorage.getItem('authToken'));
   const [username, setUsername] = useState(localStorage.getItem('username') || '');
@@ -40,57 +37,62 @@ function App() {
   const [error, setError] = useState('');
   const [history, setHistory] = useState([]);
 
-  // --- Effect: Load history on login ---
-  useEffect(() => {
-    if (isLoggedIn && authToken) {
-      fetchHistory();
-    }
-  }, [isLoggedIn, authToken]);
+  // Refs for Charts to capture images
+  const barChartRef = useRef(null);
+  const pieChartRef = useRef(null);
 
-  const fetchHistory = async () => {
+  // --- Fetch History Logic ---
+  const fetchHistory = async (token) => {
+    if (!token) return;
     try {
       const res = await axios.get('http://127.0.0.1:8000/api/upload/', {
-        headers: { 'Authorization': `Token ${authToken}` }
+        headers: { 'Authorization': `Token ${token}` }
       });
       setHistory(res.data.history);
     } catch (err) {
       console.error("Failed to fetch history", err);
+      // If 401, token might be invalid
+      if (err.response && err.response.status === 401) {
+        handleLogout();
+      }
     }
   };
 
-  // --- Auth Handler ---
+  // --- Effect: Load history on mount or login ---
+  useEffect(() => {
+    if (isLoggedIn && authToken) {
+      fetchHistory(authToken);
+    }
+  }, [isLoggedIn, authToken]);
+
   const handleAuth = async (e) => {
     e.preventDefault();
     setError('');
-
-    if (!username || !password) {
-      setError('Please enter both username and password.');
-      return;
-    }
+    if (!username || !password) { setError('Please enter both username and password.'); return; }
 
     const endpoint = isRegistering ? 'register/' : 'login/';
     const url = `http://127.0.0.1:8000/api/${endpoint}`;
 
     try {
-      const response = await axios.post(url, {
-        username: username,
-        password: password
-      });
-
+      const response = await axios.post(url, { username, password });
       if (response.status === 200) {
         const token = response.data.token;
         const user = response.data.username;
+        
+        // Save to storage
+        localStorage.setItem('authToken', token);
+        localStorage.setItem('username', user);
 
+        // Update state
         setAuthToken(token);
         setIsLoggedIn(true);
         setUsername(user);
         setError('');
         
-        localStorage.setItem('authToken', token);
-        localStorage.setItem('username', user);
+        // Explicitly fetch history immediately with the new token
+        fetchHistory(token);
       }
     } catch (err) {
-      console.error(err);
       if (err.response && err.response.data) {
         const msg = err.response.data.error || JSON.stringify(err.response.data);
         setError(`Error: ${msg}`);
@@ -100,24 +102,13 @@ function App() {
     }
   };
 
-  // --- Logout Handler ---
   const handleLogout = () => {
-    setIsLoggedIn(false);
-    setUsername('');
-    setPassword('');
-    setAuthToken('');
-    setData([]);
-    setStats(null);
-    setHistory([]);
-    setFile(null);
-    setIsRegistering(false); 
-    setShowIntro(true); // Show intro again on logout
-
-    localStorage.removeItem('authToken');
-    localStorage.removeItem('username');
+    setIsLoggedIn(false); setUsername(''); setPassword(''); setAuthToken('');
+    setData([]); setStats(null); setHistory([]); setFile(null);
+    setIsRegistering(false); setShowIntro(true);
+    localStorage.removeItem('authToken'); localStorage.removeItem('username');
   };
 
-  // --- History Handler ---
   const loadHistoryItem = async (id) => {
     setLoading(true);
     try {
@@ -128,101 +119,91 @@ function App() {
       setStats(res.data.stats);
       setError('');
     } catch (err) {
-      console.error(err);
       setError('Failed to load history item.');
     }
     setLoading(false);
   };
 
-  // --- File Handler ---
-  const handleFileChange = (e) => {
-    setFile(e.target.files[0]);
-    setError('');
-  };
+  const handleFileChange = (e) => { setFile(e.target.files[0]); setError(''); };
 
   const handleUpload = async () => {
-    if (!file) {
-      setError('Please select a CSV file first.');
-      return;
-    }
-
+    if (!file) { setError('Please select a CSV file first.'); return; }
     const formData = new FormData();
     formData.append('file', file);
-
     setLoading(true);
     try {
       const res = await axios.post('http://127.0.0.1:8000/api/upload/', formData, {
-        headers: { 
-          'Content-Type': 'multipart/form-data',
-          'Authorization': `Token ${authToken}` 
-        }
+        headers: { 'Content-Type': 'multipart/form-data', 'Authorization': `Token ${authToken}` }
       });
-
       setData(res.data.data);
       setStats(res.data.stats);
       setHistory(res.data.history);
       setError('');
     } catch (err) {
-      console.error(err);
-      if (err.response && err.response.status === 403) {
-        setError('Session expired or invalid. Please logout and login again.');
-      } else {
-        setError('Upload failed. Is the Django server running?');
-      }
+      if (err.response && err.response.status === 403) setError('Session expired. Please logout.');
+      else setError('Upload failed.');
     }
     setLoading(false);
   };
 
-  // --- PDF Generator ---
+  // --- PDF Generator with Charts ---
   const generatePDF = () => {
     const doc = new jsPDF();
+    
+    // Header
+    doc.setFontSize(18);
     doc.text("Chemical Equipment Report", 14, 20);
     doc.setFontSize(10);
-    doc.text(`Generated on: ${new Date().toLocaleString()}`, 14, 28);
+    doc.text(`Generated by: ${username} on ${new Date().toLocaleString()}`, 14, 28);
     
+    // Stats
+    let yPos = 40;
     if (stats) {
-      doc.text(`Total Count: ${stats.total_count}`, 14, 40);
-      doc.text(`Avg Pressure: ${stats.avg_pressure} psi`, 14, 46);
-      doc.text(`Avg Temperature: ${stats.avg_temp} C`, 14, 52);
+      doc.setFontSize(12);
+      doc.text(`Total Count: ${stats.total_count}`, 14, yPos);
+      doc.text(`Avg Pressure: ${stats.avg_pressure} psi`, 80, yPos);
+      doc.text(`Avg Temperature: ${stats.avg_temp} C`, 150, yPos);
+      yPos += 15;
     }
 
+    // Capture Charts
+    if (barChartRef.current && pieChartRef.current) {
+        const barURL = barChartRef.current.toBase64Image();
+        const pieURL = pieChartRef.current.toBase64Image();
+
+        // Add Charts to PDF
+        doc.addImage(barURL, 'PNG', 15, yPos, 90, 50);
+        doc.addImage(pieURL, 'PNG', 115, yPos, 80, 50);
+        yPos += 60; // Move down for table
+    }
+    
+    // Data Table
     const tableColumn = ["Name", "Type", "Pressure", "Temp", "Status"];
     const tableRows = [];
-
     data.forEach(row => {
-      const rowData = [
+      tableRows.push([
         row['Equipment Name'] || row.name,
         row['Type'] || row.type,
         row['Pressure'] || row.pressure,
         row['Temperature'] || row.temp,
         row.Status || 'UNKNOWN'
-      ];
-      tableRows.push(rowData);
+      ]);
     });
 
     autoTable(doc, {
       head: [tableColumn],
       body: tableRows,
-      startY: 60,
+      startY: yPos,
     });
 
-    doc.save("equipment_report.pdf");
+    doc.save("equipment_report_with_charts.pdf");
   };
 
-  // --- Chart Data ---
   const barChartData = {
     labels: data.map(d => d['Equipment Name'] || d.name),
     datasets: [
-      {
-        label: 'Pressure (psi)',
-        data: data.map(d => d['Pressure'] || d.pressure),
-        backgroundColor: 'rgba(53, 162, 235, 0.5)',
-      },
-      {
-        label: 'Temperature (C)',
-        data: data.map(d => d['Temperature'] || d.temp),
-        backgroundColor: 'rgba(255, 99, 132, 0.5)',
-      },
+      { label: 'Pressure (psi)', data: data.map(d => d['Pressure'] || d.pressure), backgroundColor: 'rgba(53, 162, 235, 0.5)' },
+      { label: 'Temperature (C)', data: data.map(d => d['Temperature'] || d.temp), backgroundColor: 'rgba(255, 99, 132, 0.5)' },
     ],
   };
 
@@ -230,29 +211,15 @@ function App() {
     if (!stats || !stats.type_distribution) return { labels: [], datasets: [] };
     return {
       labels: Object.keys(stats.type_distribution),
-      datasets: [
-        {
-          data: Object.values(stats.type_distribution),
-          backgroundColor: [
-            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF'
-          ],
-        },
-      ],
+      datasets: [{
+        data: Object.values(stats.type_distribution),
+        backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF'],
+      }],
     };
   };
 
-  // --- Chart Options ---
-  const pieOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: {
-        position: 'bottom',
-      },
-    },
-  };
+  const pieOptions = { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'bottom' } } };
 
-  // --- 1. Intro Page View ---
   if (showIntro) {
     return (
       <div className="intro-container">
@@ -260,30 +227,7 @@ function App() {
           <div className="logo-icon">⚗️</div>
           <h1>ChemVis Pro</h1>
           <h2>Chemical Equipment Parameter Visualizer</h2>
-          
-          <p className="intro-text">
-            A comprehensive hybrid solution for monitoring, analyzing, and reporting on chemical equipment performance.
-            Seamlessly visualize data across Web and Desktop environments.
-          </p>
-
-          <div className="feature-grid">
-            <div className="feature-item">
-              <span>📊</span>
-              <h3>Real-Time Analytics</h3>
-              <p>Visualize Pressure vs. Temperature correlations instantly.</p>
-            </div>
-            <div className="feature-item">
-              <span>🛡️</span>
-              <h3>Health Monitoring</h3>
-              <p>Automatic detection of critical parameter violations.</p>
-            </div>
-            <div className="feature-item">
-              <span>📂</span>
-              <h3>Secure History</h3>
-              <p>Track uploads and generate PDF reports for compliance.</p>
-            </div>
-          </div>
-
+          <p className="intro-text">A comprehensive hybrid solution for monitoring, analyzing, and reporting on chemical equipment performance.</p>
           <button className="start-btn" onClick={() => setShowIntro(false)}>
             {isLoggedIn ? "Go to Dashboard" : "Login / Register"}
           </button>
@@ -292,35 +236,21 @@ function App() {
     );
   }
 
-  // --- 2. Login View ---
   if (!isLoggedIn) {
     return (
       <div className="login-container">
         <div className="login-box">
-          <div className="login-header">
-            <h2>{isRegistering ? 'Create Account' : 'Welcome Back'}</h2>
-            <p>Please enter your details to continue</p>
-          </div>
+          <h2>{isRegistering ? 'Create Account' : 'Welcome Back'}</h2>
           <form onSubmit={handleAuth}>
-            <input 
-              type="text" placeholder="Username" 
-              value={username} onChange={e => setUsername(e.target.value)} 
-            />
-            <input 
-              type="password" placeholder="Password" 
-              value={password} onChange={e => setPassword(e.target.value)} 
-            />
+            <input type="text" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+            <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} />
             <button type="submit" style={{ backgroundColor: isRegistering ? '#27ae60' : '#3498db' }}>
               {isRegistering ? 'Create Account' : 'Login'}
             </button>
-            {error && <p className="error-text">{error}</p>}
             <p style={{ marginTop: '15px', fontSize: '0.9rem', color: '#666' }}>
-              {isRegistering ? "Already have an account?" : "Don't have an account?"}
-              <span 
-                onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
-                style={{ color: '#3498db', cursor: 'pointer', marginLeft: '5px', fontWeight: 'bold' }}
-              >
-                {isRegistering ? 'Login here' : 'Register here'}
+              {isRegistering ? "Already have account?" : "No account?"}
+              <span onClick={() => { setIsRegistering(!isRegistering); setError(''); }} style={{ color: '#3498db', cursor: 'pointer', marginLeft: '5px', fontWeight: 'bold' }}>
+                {isRegistering ? 'Login' : 'Register'}
               </span>
             </p>
           </form>
@@ -329,7 +259,6 @@ function App() {
     );
   }
 
-  // --- 3. Dashboard View ---
   return (
     <div className="app-container">
       <header className="navbar">
@@ -345,12 +274,9 @@ function App() {
           <div className="card upload-card">
             <h3>📂 Upload CSV</h3>
             <input type="file" onChange={handleFileChange} accept=".csv" />
-            <button onClick={handleUpload} disabled={loading}>
-              {loading ? 'Processing...' : 'Upload & Analyze'}
-            </button>
+            <button onClick={handleUpload} disabled={loading}>{loading ? 'Processing...' : 'Upload & Analyze'}</button>
             {error && <p className="error-text">{error}</p>}
           </div>
-
           <div className="card history-card">
             <h3>📜 History</h3>
             <ul className="history-list">
@@ -362,7 +288,7 @@ function App() {
                   </div>
                 </li>
               ))}
-              {history.length === 0 && <small style={{color:'#999'}}>No history yet</small>}
+              {history.length === 0 && <small style={{color:'#999', fontStyle: 'italic', padding: '10px'}}>No history yet.</small>}
             </ul>
           </div>
         </section>
@@ -370,22 +296,10 @@ function App() {
         <section className="analytics">
           {stats && (
             <div className="kpi-row">
-              <div className="kpi-card">
-                <h4>Total Equipment</h4>
-                <p>{stats.total_count}</p>
-              </div>
-              <div className="kpi-card">
-                <h4>Avg Pressure</h4>
-                <p>{stats.avg_pressure} <small>psi</small></p>
-              </div>
-              <div className="kpi-card">
-                <h4>Avg Temp</h4>
-                <p>{stats.avg_temp} <small>°C</small></p>
-              </div>
-              <div className="kpi-card action-card" onClick={generatePDF}>
-                <h4>📄 Download Report</h4>
-                <p>Click to PDF</p>
-              </div>
+              <div className="kpi-card"><h4>Total</h4><p>{stats.total_count}</p></div>
+              <div className="kpi-card"><h4>Avg Pressure</h4><p>{stats.avg_pressure} <small>psi</small></p></div>
+              <div className="kpi-card"><h4>Avg Temp</h4><p>{stats.avg_temp} <small>°C</small></p></div>
+              <div className="kpi-card action-card" onClick={generatePDF}><h4>📄 Download Report</h4><p>With Charts</p></div>
             </div>
           )}
 
@@ -393,19 +307,19 @@ function App() {
             <div className="charts-grid">
               <div className="chart-card">
                 <h4>Pressure vs Temperature</h4>
-                <Bar data={barChartData} />
+                {/* Ref attached here */}
+                <Bar ref={barChartRef} data={barChartData} />
               </div>
               <div className="chart-card">
                 <h4>Equipment Type Distribution</h4>
                 <div className="pie-container" style={{ position: 'relative', height: '300px', width: '100%' }}>
-                  <Pie data={getPieData()} options={pieOptions} />
+                  {/* Ref attached here */}
+                  <Pie ref={pieChartRef} data={getPieData()} options={pieOptions} />
                 </div>
               </div>
             </div>
           ) : (
-            <div className="empty-state">
-              <p>Upload a CSV file to view analytics.</p>
-            </div>
+            <div className="empty-state"><p>Upload a CSV file to view analytics.</p></div>
           )}
 
           {data.length > 0 && (
@@ -414,13 +328,7 @@ function App() {
               <div className="table-responsive">
                 <table>
                   <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Type</th>
-                      <th>Pressure</th>
-                      <th>Temp</th>
-                      <th>Health Status</th>
-                    </tr>
+                    <tr><th>Name</th><th>Type</th><th>Pressure</th><th>Temp</th><th>Health Status</th></tr>
                   </thead>
                   <tbody>
                     {data.map((row, idx) => (
@@ -429,11 +337,7 @@ function App() {
                         <td>{row['Type'] || row.type}</td>
                         <td>{row['Pressure'] || row.pressure}</td>
                         <td>{row['Temperature'] || row.temp}</td>
-                        <td>
-                          <span className={`badge ${row.Status}`}>
-                            {row.Status}
-                          </span>
-                        </td>
+                        <td><span className={`badge ${row.Status}`}>{row.Status}</span></td>
                       </tr>
                     ))}
                   </tbody>
