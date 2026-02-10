@@ -45,7 +45,7 @@ function App() {
   const fetchHistory = async (token) => {
     if (!token) return;
     try {
-      const res = await axios.get('http://127.0.0.1:8000/api/upload/', {
+      const res = await axios.get('https://chemvispro.onrender.com/api/upload/', {
         headers: { 'Authorization': `Token ${token}` }
       });
       setHistory(res.data.history);
@@ -71,7 +71,7 @@ function App() {
     if (!username || !password) { setError('Please enter both username and password.'); return; }
 
     const endpoint = isRegistering ? 'register/' : 'login/';
-    const url = `http://127.0.0.1:8000/api/${endpoint}`;
+    const url = `https://chemvispro.onrender.com/api/${endpoint}`;
 
     try {
       const response = await axios.post(url, { username, password });
@@ -112,7 +112,7 @@ function App() {
   const loadHistoryItem = async (id) => {
     setLoading(true);
     try {
-      const res = await axios.get(`http://127.0.0.1:8000/api/history/${id}/`, {
+      const res = await axios.get(`https://chemvispro.onrender.com/api/history/${id}/`, {
          headers: { 'Authorization': `Token ${authToken}` }
       });
       setData(res.data.data);
@@ -132,7 +132,7 @@ function App() {
     formData.append('file', file);
     setLoading(true);
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/upload/', formData, {
+      const res = await axios.post('https://chemvispro.onrender.com/api/upload/', formData, {
         headers: { 'Content-Type': 'multipart/form-data', 'Authorization': `Token ${authToken}` }
       });
       setData(res.data.data);
